@@ -131,6 +131,25 @@ filtered_df.plot(column='price_per_sqm', legend=True, cmap='OrRd')
 del filtered_df['geometry']
 del filtered_df['index_right']
 
+#4.5 augment dataset by amenities
+amenities = pd.read_parquet('data/amenities.parquet')
+
+amenities = project_coordinates(amenities)
+
+top_amenities=['parking', 'restaurant', 'fast_food', 'post_box',
+               'kindergarten', 'cafe', 'pub', 'school',
+               'place_of_worship', 'doctors', 'pharmacy', 'bank',
+               'fuel']
+for amenity in top_amenities:
+    t = filtered_df[['lat_proj', 'lon_proj']].join(
+        amenities[amenities['tagvalue']==amenity][['lat_proj', 'lon_proj']],
+        how='cross',
+        rsuffix='_a')
+    t['avail'] = 1000/(abs(t['lat_proj']-t['lat_proj_a'])+abs(t['lon_proj']-t['lon_proj_a']))
+    t = t.groupby(['lat_proj', 'lon_proj'], as_index=False)['avail'].max()
+    t.columns=['lat_proj', 'lon_proj', amenity+'_avail']
+    filtered_df = pd.merge(filtered_df,t, on=['lat_proj', 'lon_proj'])
+
 #5 we are ready to prepare the first model
 
 '''the model is very simple
@@ -147,9 +166,10 @@ Multiply it on total and living areas respectively
 And calculate simple model
 '''
 
+amen_cols = [x+'_avail' for x in top_amenities]
 X_train, X_test, y_train, y_test = train_test_split(
     filtered_df[['region_id', 'living_area', 'total_area', 'number_of_units',
-                 'property_type']],
+                 'property_type']+amen_cols],
     filtered_df['price'], test_size=0.33, random_state=42)
 
 land = pd.get_dummies(X_train['region_id'], prefix='land')
@@ -159,9 +179,10 @@ house = house.multiply(X_train['living_area'], axis="index")
 ptype = pd.get_dummies(X_train['property_type'], prefix='ptype', drop_first=True)
 ptype = ptype.multiply(X_train['living_area'], axis="index")
 
-land_cols = land.columns
-house_cols = house.columns
-predictors = land_cols.append([house_cols, ptype.columns])
+land_cols = land.columns.to_list()
+house_cols = house.columns.to_list()
+ptypecols = ptype.columns.to_list()
+predictors = land_cols + house_cols + ptypecols + amen_cols
 
 X_train = pd.concat([X_train, land, house, ptype], axis=1)
 
@@ -169,7 +190,9 @@ from sklearn.linear_model import LinearRegression
 
 reg = LinearRegression().fit(X_train[predictors], y_train)
 print(reg.score(X_train[predictors], y_train))
-print(reg.coef_)
+feaure_coeffs = dict(zip(predictors, reg.coef_))
+print(feaure_coeffs)
+
 
 
 land = pd.get_dummies(X_test['region_id'], prefix='land')
